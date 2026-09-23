@@ -162,20 +162,35 @@ pcall(function()
     MatchmakingTrialData = require(ReplicatedStorage.Client.Interfaces.Lobby.Components.NewMatchmaking.MatchmakingTrialData)
 end)
 
--- Helper to safely get value even if still downloading on fresh join
+local function getCacheModule()
+    if not Cache then
+        pcall(function()
+            local cm = ReplicatedStorage:FindFirstChild("Client")
+            cm = cm and cm:FindFirstChild("Modules")
+            cm = cm and cm:FindFirstChild("Cache")
+            if cm then
+                Cache = require(cm)
+            end
+        end)
+    end
+    return Cache
+end
+
+-- Helper to safely get value live from ReplicatedStorage Cache atom
 local function getStat(name)
-    if Cache and (type(Cache) == "table" or type(Cache) == "function") then
+    local c = getCacheModule()
+    if c and (type(c) == "table" or type(c) == "function") then
         local ok, val = pcall(function()
-            local atom = Cache(name)
+            local atom = c(name)
             if atom then
-                -- 1. Check synchronous cached value first
+                -- 1. Check synchronous live value first
                 if type(atom.GetValue) == "function" then
                     local fastVal = atom:GetValue()
                     if fastVal ~= nil then
                         return fastVal
                     end
                 end
-                -- 2. If nil (e.g. freshly joined lobby), fetch and await the cache promise
+                -- 2. If nil (e.g. freshly joined lobby or match), fetch and await the cache promise
                 if type(atom.Get) == "function" then
                     local promise = atom:Get()
                     if promise and type(promise.await) == "function" then
