@@ -149,7 +149,7 @@ RevampAutoTrials = {
         Level = 175,
         Maps = {"Forgetten Docks"},
         Towers = {
-            ["Tower 1"] = {"Gatling Gun", "Medic", "Mercenary Base", "Militant", "DJ Booth"}
+            ["Tower 1"] = {"Gatling Gun", "Medic", "Mercenary Base", "Militant", "Trapper"}
         },
         Golden = {},
         SkillTree = {},
