@@ -1476,16 +1476,23 @@ local function GetRoot()
 end
 
 local function StartAutoGatling()
+    if Globals.DisableAPIGatling or Globals.GatlingManagedByMain or Globals.GatlingLoaderLoaded then return end
     if AutoGatlingRunning or not Globals.AutoGatling then return end
     AutoGatlingRunning = true
     task.spawn(function()
-        while Globals.AutoGatling do
+        while Globals.AutoGatling and not Globals.DisableAPIGatling and not Globals.GatlingManagedByMain do
             if GameState == "GAME" then
-                if not GatlingExecuted then
+                if not GatlingExecuted and not Globals.GatlingLoaderLoaded then
                     GatlingExecuted = true 
+                    Globals.GatlingLoaderLoaded = true
                     task.spawn(function()
                         pcall(function()
-                            loadstring(game:HttpGet("https://raw.githubusercontent.com/avtryxz/autogutlin/refs/heads/main/autogutlin.lua"))()
+                            local selected = Globals.SelectedGatling or "Gatlify"
+                            if selected == "Gatling Gun" then
+                                loadstring(game:HttpGet("https://raw.githubusercontent.com/avtryxz/autogutlin/refs/heads/main/autogutlin.lua"))()
+                            else
+                                loadstring(game:HttpGet("https://raw.githubusercontent.com/avtryxz/Gatlify/refs/heads/main/Gatlify.lua"))()
+                            end
                         end)
                     end)
                 end
@@ -2082,7 +2089,7 @@ task.spawn(function()
             StartBackToLobby()
         end
 
-        if Globals.AutoGatling and not AutoGatlingRunning then
+        if Globals.AutoGatling and not AutoGatlingRunning and not Globals.DisableAPIGatling and not Globals.GatlingManagedByMain then
             StartAutoGatling()
         end
 
