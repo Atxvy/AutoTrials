@@ -926,13 +926,13 @@ local function createPageApi(window: any, scroll: ScrollingFrame)
         function item:GetValue() return value end
         function item:SetVisible(nextVal: boolean) row.Visible = nextVal end
         function item:SetTitle(newTitle: string)
-            local titleLbl = row:FindFirstChild("Title", true)
+            local titleLbl = row:FindFirstChild("TextWrap") and row.TextWrap:FindFirstChild("Title")
             if titleLbl and titleLbl:IsA("TextLabel") then
                 titleLbl.Text = tostring(newTitle)
             end
         end
         function item:SetDesc(newDesc: string)
-            local descLbl = row:FindFirstChild("Desc", true)
+            local descLbl = row:FindFirstChild("TextWrap") and row.TextWrap:FindFirstChild("Desc")
             if descLbl and descLbl:IsA("TextLabel") then
                 descLbl.Text = tostring(newDesc)
             end
