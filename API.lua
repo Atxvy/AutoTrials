@@ -6,7 +6,14 @@ local Players = game:GetService("Players")
 local TeleportService = game:GetService("TeleportService")
 local GuiService = game:GetService("GuiService")
 local UserInputService = game:GetService("UserInputService")
-local LocalPlayer = Players.LocalPlayer or Players.PlayerAdded:Wait()
+local LocalPlayer = Players.LocalPlayer
+if not LocalPlayer then
+    local t0 = tick()
+    while not Players.LocalPlayer and (tick() - t0 < 10) do
+        task.wait(0.1)
+    end
+    LocalPlayer = Players.LocalPlayer
+end
 
 local function SmartTeleportToLobby()
     local lobbyId = 3260590327
