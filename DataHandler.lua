@@ -50,90 +50,6 @@ local function parseNumber(str)
 end
 
 -- ---------------------------------------------------------------------
--- File Cache Helpers & Cross-Place Persistence
--- ---------------------------------------------------------------------
-local function ensureFolder(folderPath)
-    if makefolder and isfolder and not isfolder(folderPath) then
-        pcall(makefolder, folderPath)
-    end
-end
-
-local function ensureParentFolder(filePath)
-    local folderPath = filePath:match("^(.*)/[^/]+$")
-    if folderPath and folderPath ~= "" then
-        ensureFolder(folderPath)
-    end
-end
-
-local function safeWriteJSON(filePath, tbl)
-    if writefile and HttpService then
-        pcall(function()
-            ensureParentFolder(filePath)
-            writefile(filePath, HttpService:JSONEncode(tbl))
-        end)
-    end
-end
-
-local function safeReadJSON(filePaths)
-    if not (readfile and HttpService) then return nil end
-    for _, path in ipairs(filePaths) do
-        local ok, exists = pcall(function() return isfile and isfile(path) end)
-        if ok and exists then
-            local readOk, content = pcall(readfile, path)
-            if readOk and content and content ~= "" then
-                local decodeOk, decoded = pcall(function() return HttpService:JSONDecode(content) end)
-                if decodeOk and type(decoded) == "table" then
-                    return decoded
-                end
-            end
-        end
-    end
-    return nil
-end
-
-local inMemoryPlayerData = { Level = 0, Coins = 0, Gems = 0 }
-
-local function saveCachedPlayerData(level, coins, gems)
-    local changed = false
-    if level and tonumber(level) and tonumber(level) > 0 then
-        inMemoryPlayerData.Level = tonumber(level)
-        changed = true
-    end
-    if coins and tonumber(coins) and tonumber(coins) > 0 then
-        inMemoryPlayerData.Coins = tonumber(coins)
-        changed = true
-    end
-    if gems and tonumber(gems) and tonumber(gems) > 0 then
-        inMemoryPlayerData.Gems = tonumber(gems)
-        changed = true
-    end
-    if changed then
-        safeWriteJSON("ServiceHub/CachedPlayerData.json", inMemoryPlayerData)
-        safeWriteJSON("CachedPlayerData.json", inMemoryPlayerData)
-    end
-end
-
-local function getSavedPlayerData()
-    local saved = safeReadJSON({
-        "ServiceHub/CachedPlayerData.json",
-        "CachedPlayerData.json",
-        "ProjectOptimazation/CachedPlayerData.json"
-    })
-    if saved and type(saved) == "table" then
-        if saved.Level and tonumber(saved.Level) and tonumber(saved.Level) > 0 then
-            inMemoryPlayerData.Level = tonumber(saved.Level)
-        end
-        if saved.Coins and tonumber(saved.Coins) and tonumber(saved.Coins) > 0 then
-            inMemoryPlayerData.Coins = tonumber(saved.Coins)
-        end
-        if saved.Gems and tonumber(saved.Gems) and tonumber(saved.Gems) > 0 then
-            inMemoryPlayerData.Gems = tonumber(saved.Gems)
-        end
-    end
-    return inMemoryPlayerData
-end
-
--- ---------------------------------------------------------------------
 -- Internal Cache & Game Module Access
 -- ---------------------------------------------------------------------
 local Cache = nil
@@ -162,35 +78,20 @@ pcall(function()
     MatchmakingTrialData = require(ReplicatedStorage.Client.Interfaces.Lobby.Components.NewMatchmaking.MatchmakingTrialData)
 end)
 
-local function getCacheModule()
-    if not Cache then
-        pcall(function()
-            local cm = ReplicatedStorage:FindFirstChild("Client")
-            cm = cm and cm:FindFirstChild("Modules")
-            cm = cm and cm:FindFirstChild("Cache")
-            if cm then
-                Cache = require(cm)
-            end
-        end)
-    end
-    return Cache
-end
-
--- Helper to safely get value live from ReplicatedStorage Cache atom
+-- Helper to safely get value even if still downloading on fresh join
 local function getStat(name)
-    local c = getCacheModule()
-    if c and (type(c) == "table" or type(c) == "function") then
+    if Cache and (type(Cache) == "table" or type(Cache) == "function") then
         local ok, val = pcall(function()
-            local atom = c(name)
+            local atom = Cache(name)
             if atom then
-                -- 1. Check synchronous live value first
+                -- 1. Check synchronous cached value first
                 if type(atom.GetValue) == "function" then
                     local fastVal = atom:GetValue()
                     if fastVal ~= nil then
                         return fastVal
                     end
                 end
-                -- 2. If nil (e.g. freshly joined lobby or match), fetch and await the cache promise
+                -- 2. If nil (e.g. freshly joined lobby), fetch and await the cache promise
                 if type(atom.Get) == "function" then
                     local promise = atom:Get()
                     if promise and type(promise.await) == "function" then
@@ -593,10 +494,8 @@ end
 function CombinedData:GetLevel()
     -- 1. Direct Cache lookup (Values.Level)
     local lvl = getStat("Values.Level")
-    if lvl ~= nil and tonumber(lvl) and tonumber(lvl) > 0 then
-        local num = tonumber(lvl)
-        saveCachedPlayerData(num, nil, nil)
-        return num, tostring(lvl)
+    if lvl ~= nil and tonumber(lvl) then
+        return tonumber(lvl), tostring(lvl)
     end
 
     -- 2. Fallback: Lobby HUD TextLabel
@@ -607,33 +506,18 @@ function CombinedData:GetLevel()
 
         if curLvl and curLvl:IsA("TextLabel") then
             local txt = curLvl.Text
-            local num = parseNumber(txt)
-            if num > 0 then
-                saveCachedPlayerData(num, nil, nil)
-                return num, txt
-            end
+            return parseNumber(txt), txt
         end
     end
 
-    -- 3. Fallback: LocalPlayer ValueBase / leaderstats
+    -- 3. Fallback: LocalPlayer ValueBase
     local lp = getLocalPlayer()
     if lp then
-        local ls = lp:FindFirstChild("leaderstats")
-        local val = lp:FindFirstChild("Level") or (ls and ls:FindFirstChild("Level"))
+        local val = lp:FindFirstChild("Level")
         if val and val:IsA("ValueBase") then
             local v = val.Value
-            local num = tonumber(v) or parseNumber(v)
-            if num > 0 then
-                saveCachedPlayerData(num, nil, nil)
-                return num, tostring(v)
-            end
+            return tonumber(v) or parseNumber(v), tostring(v)
         end
-    end
-
-    -- 4. Fallback: Saved / in-memory player data
-    local pData = getSavedPlayerData()
-    if pData and pData.Level and pData.Level > 0 then
-        return pData.Level, tostring(pData.Level)
     end
 
     return 0, "0"
@@ -642,10 +526,8 @@ end
 function CombinedData:GetCoins()
     -- 1. Direct Cache lookup (Values.Coins)
     local coins = getStat("Values.Coins")
-    if coins ~= nil and tonumber(coins) and tonumber(coins) > 0 then
-        local num = tonumber(coins)
-        saveCachedPlayerData(nil, num, nil)
-        return num, tostring(coins)
+    if coins ~= nil and tonumber(coins) then
+        return tonumber(coins), tostring(coins)
     end
 
     -- 2. Fallback: Lobby HUD TextLabel
@@ -659,33 +541,18 @@ function CombinedData:GetCoins()
         end
         if node and node:IsA("TextLabel") then
             local txt = node.Text
-            local num = parseNumber(txt)
-            if num > 0 then
-                saveCachedPlayerData(nil, num, nil)
-                return num, txt
-            end
+            return parseNumber(txt), txt
         end
     end
 
-    -- 3. Fallback: LocalPlayer ValueBase / leaderstats
+    -- 3. Fallback: LocalPlayer ValueBase
     local lp = getLocalPlayer()
     if lp then
-        local ls = lp:FindFirstChild("leaderstats")
-        local val = lp:FindFirstChild("Coins") or lp:FindFirstChild("Gold") or (ls and (ls:FindFirstChild("Coins") or ls:FindFirstChild("Gold")))
+        local val = lp:FindFirstChild("Coins") or lp:FindFirstChild("Gold")
         if val and val:IsA("ValueBase") then
             local v = val.Value
-            local num = tonumber(v) or parseNumber(v)
-            if num > 0 then
-                saveCachedPlayerData(nil, num, nil)
-                return num, tostring(v)
-            end
+            return tonumber(v) or parseNumber(v), tostring(v)
         end
-    end
-
-    -- 4. Fallback: Saved / in-memory player data
-    local pData = getSavedPlayerData()
-    if pData and pData.Coins and pData.Coins > 0 then
-        return pData.Coins, tostring(pData.Coins)
     end
 
     return 0, "0"
@@ -694,10 +561,8 @@ end
 function CombinedData:GetGems()
     -- 1. Direct Cache lookup (Values.Gems)
     local gems = getStat("Values.Gems")
-    if gems ~= nil and tonumber(gems) and tonumber(gems) > 0 then
-        local num = tonumber(gems)
-        saveCachedPlayerData(nil, nil, num)
-        return num, tostring(gems)
+    if gems ~= nil and tonumber(gems) then
+        return tonumber(gems), tostring(gems)
     end
 
     -- 2. Fallback: Lobby HUD TextLabel
@@ -711,33 +576,18 @@ function CombinedData:GetGems()
         end
         if node and node:IsA("TextLabel") then
             local txt = node.Text
-            local num = parseNumber(txt)
-            if num > 0 then
-                saveCachedPlayerData(nil, nil, num)
-                return num, txt
-            end
+            return parseNumber(txt), txt
         end
     end
 
-    -- 3. Fallback: LocalPlayer ValueBase / leaderstats
+    -- 3. Fallback: LocalPlayer ValueBase
     local lp = getLocalPlayer()
     if lp then
-        local ls = lp:FindFirstChild("leaderstats")
-        local val = lp:FindFirstChild("Gems") or lp:FindFirstChild("Diamonds") or (ls and (ls:FindFirstChild("Gems") or ls:FindFirstChild("Diamonds")))
+        local val = lp:FindFirstChild("Gems") or lp:FindFirstChild("Diamonds")
         if val and val:IsA("ValueBase") then
             local v = val.Value
-            local num = tonumber(v) or parseNumber(v)
-            if num > 0 then
-                saveCachedPlayerData(nil, nil, num)
-                return num, tostring(v)
-            end
+            return tonumber(v) or parseNumber(v), tostring(v)
         end
-    end
-
-    -- 4. Fallback: Saved / in-memory player data
-    local pData = getSavedPlayerData()
-    if pData and pData.Gems and pData.Gems > 0 then
-        return pData.Gems, tostring(pData.Gems)
     end
 
     return 0, "0"
@@ -779,7 +629,7 @@ end
 -- ---------------------------------------------------------------------
 -- Skill‑tree extraction
 -- ---------------------------------------------------------------------
-local skillTreeCacheFile = "ServiceHub/CachedSkillTree.json"
+local skillTreeCacheFile = "ProjectOptimazation/CachedSkillTree.json"
 local inMemorySkillTreeCache = {}
 
 function CombinedData:GetSkillTree()
@@ -799,21 +649,10 @@ function CombinedData:GetSkillTree()
 
                     local formattedLvl = lvlStr
                     local numericLvl = parseNumber(lvlStr)
-                    local isMaxed = false
 
                     if string.upper(lvlStr):find("MAX") then
                         formattedLvl = "MAX" .. (numericLvl > 0 and numericLvl or "")
                         if numericLvl == 0 then numericLvl = 999 end
-                        isMaxed = true
-                    end
-
-                    local curNum, maxNum = lvlStr:match("(%d+)%s*/%s*(%d+)")
-                    if curNum and maxNum and tonumber(curNum) >= tonumber(maxNum) then
-                        isMaxed = true
-                    end
-
-                    if numericLvl >= 50 or numericLvl >= 999 then
-                        isMaxed = true
                     end
 
                     table.insert(list, {
@@ -821,7 +660,6 @@ function CombinedData:GetSkillTree()
                         Name = name,
                         Level = numericLvl,
                         LevelFormatted = formattedLvl,
-                        IsMaxed = isMaxed,
                     })
                 end
             end
@@ -830,8 +668,11 @@ function CombinedData:GetSkillTree()
 
     if #list > 0 then
         inMemorySkillTreeCache = list
-        safeWriteJSON("ServiceHub/CachedSkillTree.json", list)
-        safeWriteJSON("CachedSkillTree.json", list)
+        pcall(function()
+            if writefile and HttpService then
+                writefile(skillTreeCacheFile, HttpService:JSONEncode(list))
+            end
+        end)
         return list
     end
 
@@ -839,32 +680,19 @@ function CombinedData:GetSkillTree()
         return inMemorySkillTreeCache
     end
 
-    local saved = safeReadJSON({
-        "ServiceHub/CachedSkillTree.json",
-        "CachedSkillTree.json",
-        "ProjectOptimazation/CachedSkillTree.json"
-    })
-    if saved and type(saved) == "table" and #saved > 0 then
-        inMemorySkillTreeCache = saved
-    end
+    pcall(function()
+        if isfile and readfile and HttpService and isfile(skillTreeCacheFile) then
+            local raw = readfile(skillTreeCacheFile)
+            if raw and raw ~= "" then
+                local decoded = HttpService:JSONDecode(raw)
+                if type(decoded) == "table" and #decoded > 0 then
+                    inMemorySkillTreeCache = decoded
+                end
+            end
+        end
+    end)
 
     return inMemorySkillTreeCache
-end
-
-function CombinedData:IsSkillTreeMaxed()
-    local skills = self:GetSkillTree()
-    if not skills or #skills == 0 then return false end
-    local maxedCount = 0
-    for _, sk in ipairs(skills) do
-        local maxed = (sk.IsMaxed == true)
-            or ((sk.Level or 0) >= 50)
-            or ((sk.Level or 0) >= 999)
-            or (sk.LevelFormatted and tostring(sk.LevelFormatted):upper():find("MAX") ~= nil)
-        if maxed then
-            maxedCount = maxedCount + 1
-        end
-    end
-    return maxedCount >= 17
 end
 
 -- ---------------------------------------------------------------------
@@ -969,27 +797,10 @@ end
 -- ---------------------------------------------------------------------
 -- Trials Data & Progression
 -- ---------------------------------------------------------------------
-local currentTrialCacheFile = "ServiceHub/CachedCurrentTrial.json"
-local nextTrialCacheFile = "ServiceHub/CachedNextTrial.json"
+local currentTrialCacheFile = "ProjectOptimazation/CachedCurrentTrial.json"
+local nextTrialCacheFile = "ProjectOptimazation/CachedNextTrial.json"
 local inMemoryCurrentTrial = nil
 local inMemoryNextTrial = nil
-local inMemoryOwnedModifiers = nil
-
-local function getSavedOwnedModifiers()
-    local saved = safeReadJSON({
-        "ServiceHub/CachedTrialsStatus.json",
-        "CachedTrialsStatus.json",
-        "ProjectOptimazation/CachedTrialsStatus.json"
-    })
-    if saved and type(saved) == "table" then
-        if saved.Modifiers and type(saved.Modifiers) == "table" and #saved.Modifiers > 0 then
-            return saved.Modifiers
-        elseif #saved > 0 then
-            return saved
-        end
-    end
-    return nil
-end
 
 function CombinedData:GetCurrentTrial()
     if MatchmakingTrialData then
@@ -1013,54 +824,28 @@ function CombinedData:GetCurrentTrial()
         end)
         if ok and res and res.Title then
             inMemoryCurrentTrial = res
-            safeWriteJSON("ServiceHub/CachedCurrentTrial.json", res)
-            safeWriteJSON("CachedCurrentTrial.json", res)
+            pcall(function()
+                if writefile and HttpService then
+                    writefile(currentTrialCacheFile, HttpService:JSONEncode(res))
+                end
+            end)
             return res
         end
     end
 
-    if inMemoryCurrentTrial then
-        if inMemoryCurrentTrial.ExpiresAt then
-            local sec = math.max(0, inMemoryCurrentTrial.ExpiresAt - os.time())
-            inMemoryCurrentTrial.TimeRemaining = string.format("%02d:%02d:%02d", math.floor(sec/3600), math.floor((sec%3600)/60), sec%60)
-        end
-        return inMemoryCurrentTrial
-    end
+    if inMemoryCurrentTrial then return inMemoryCurrentTrial end
 
-    local saved = safeReadJSON({
-        "ServiceHub/CachedCurrentTrial.json",
-        "CachedCurrentTrial.json",
-        "ProjectOptimazation/CachedCurrentTrial.json"
-    })
-    if saved and type(saved) == "table" and (saved.Title or saved.Name) then
-        if saved.ExpiresAt then
-            local sec = math.max(0, saved.ExpiresAt - os.time())
-            saved.TimeRemaining = string.format("%02d:%02d:%02d", math.floor(sec/3600), math.floor((sec%3600)/60), sec%60)
-        end
-        inMemoryCurrentTrial = saved
-        return inMemoryCurrentTrial
-    end
-
-    -- Match fallback if no rotation cache available
-    if not inMemoryCurrentTrial then
-        pcall(function()
-            local stateReps = ReplicatedStorage:FindFirstChild("StateReplicators")
-            local gsr = stateReps and stateReps:FindFirstChild("GameStateReplicator")
-            if gsr then
-                local gt = gsr:GetAttribute("GlobalTrial")
-                if gt and tostring(gt) ~= "" and tostring(gt) ~= "None" then
-                    local mapName = tostring(gsr:GetAttribute("Map") or gsr:GetAttribute("MapName") or "Unknown")
-                    inMemoryCurrentTrial = {
-                        Name = tostring(gt),
-                        Title = tostring(gt),
-                        Map = mapName,
-                        TimeRemaining = "In Match",
-                        ExpiresAt = os.time() + 1800
-                    }
+    pcall(function()
+        if isfile and readfile and HttpService and isfile(currentTrialCacheFile) then
+            local raw = readfile(currentTrialCacheFile)
+            if raw and raw ~= "" then
+                local decoded = HttpService:JSONDecode(raw)
+                if type(decoded) == "table" and decoded.Title then
+                    inMemoryCurrentTrial = decoded
                 end
             end
-        end)
-    end
+        end
+    end)
 
     return inMemoryCurrentTrial
 end
@@ -1088,33 +873,28 @@ function CombinedData:GetNextTrial()
         end)
         if ok and res and res.Title then
             inMemoryNextTrial = res
-            safeWriteJSON("ServiceHub/CachedNextTrial.json", res)
-            safeWriteJSON("CachedNextTrial.json", res)
+            pcall(function()
+                if writefile and HttpService then
+                    writefile(nextTrialCacheFile, HttpService:JSONEncode(res))
+                end
+            end)
             return res
         end
     end
 
-    if inMemoryNextTrial then
-        if inMemoryNextTrial.ExpiresAt then
-            local sec = math.max(0, inMemoryNextTrial.ExpiresAt - os.time())
-            inMemoryNextTrial.TimeRemaining = string.format("%02d:%02d:%02d", math.floor(sec/3600), math.floor((sec%3600)/60), sec%60)
-        end
-        return inMemoryNextTrial
-    end
+    if inMemoryNextTrial then return inMemoryNextTrial end
 
-    local saved = safeReadJSON({
-        "ServiceHub/CachedNextTrial.json",
-        "CachedNextTrial.json",
-        "ProjectOptimazation/CachedNextTrial.json"
-    })
-    if saved and type(saved) == "table" and (saved.Title or saved.Name) then
-        if saved.ExpiresAt then
-            local sec = math.max(0, saved.ExpiresAt - os.time())
-            saved.TimeRemaining = string.format("%02d:%02d:%02d", math.floor(sec/3600), math.floor((sec%3600)/60), sec%60)
+    pcall(function()
+        if isfile and readfile and HttpService and isfile(nextTrialCacheFile) then
+            local raw = readfile(nextTrialCacheFile)
+            if raw and raw ~= "" then
+                local decoded = HttpService:JSONDecode(raw)
+                if type(decoded) == "table" and decoded.Title then
+                    inMemoryNextTrial = decoded
+                end
+            end
         end
-        inMemoryNextTrial = saved
-        return inMemoryNextTrial
-    end
+    end)
 
     return inMemoryNextTrial
 end
@@ -1154,34 +934,19 @@ function CombinedData:GetTrialsStatus()
         end
     end
 
-    local ownedModifiers = getCacheValue("Inventory.Modifiers")
-    if ownedModifiers and type(ownedModifiers) == "table" and #ownedModifiers > 0 then
-        inMemoryOwnedModifiers = ownedModifiers
-        safeWriteJSON("ServiceHub/CachedTrialsStatus.json", { Modifiers = ownedModifiers })
-        safeWriteJSON("CachedTrialsStatus.json", { Modifiers = ownedModifiers })
-    elseif not inMemoryOwnedModifiers or #inMemoryOwnedModifiers == 0 then
-        inMemoryOwnedModifiers = getSavedOwnedModifiers() or {}
-    end
-
-    if (not ownedModifiers or #ownedModifiers == 0) and inMemoryOwnedModifiers then
-        ownedModifiers = inMemoryOwnedModifiers
-    end
-    ownedModifiers = ownedModifiers or {}
-
+    local ownedModifiers = getCacheValue("Inventory.Modifiers") or {}
     if setthreadidentity then pcall(setthreadidentity, 8) end
 
     local lookup = {}
     for _, mod in ipairs(ownedModifiers) do
         lookup[mod] = true
-        lookup[string.lower(tostring(mod)):gsub("%s+", "")] = true
     end
 
     local won = {}
     local notWon = {}
 
     for _, trialName in ipairs(allTrials) do
-        local cleanKey = string.lower(tostring(trialName)):gsub("%s+", "")
-        if lookup[trialName] or lookup[cleanKey] then
+        if lookup[trialName] then
             table.insert(won, trialName)
         else
             table.insert(notWon, trialName)
@@ -1196,26 +961,12 @@ end
 
 function CombinedData:GetAllTrialsList()
     if setthreadidentity then pcall(setthreadidentity, 8) end
-    local ownedModifiers = getCacheValue("Inventory.Modifiers")
-    if ownedModifiers and type(ownedModifiers) == "table" and #ownedModifiers > 0 then
-        inMemoryOwnedModifiers = ownedModifiers
-        safeWriteJSON("ServiceHub/CachedTrialsStatus.json", { Modifiers = ownedModifiers })
-        safeWriteJSON("CachedTrialsStatus.json", { Modifiers = ownedModifiers })
-    elseif not inMemoryOwnedModifiers or #inMemoryOwnedModifiers == 0 then
-        inMemoryOwnedModifiers = getSavedOwnedModifiers() or {}
-    end
-
-    if (not ownedModifiers or #ownedModifiers == 0) and inMemoryOwnedModifiers then
-        ownedModifiers = inMemoryOwnedModifiers
-    end
-    ownedModifiers = ownedModifiers or {}
-
+    local ownedModifiers = getCacheValue("Inventory.Modifiers") or {}
     if setthreadidentity then pcall(setthreadidentity, 8) end
 
     local lookup = {}
     for _, mod in ipairs(ownedModifiers) do
         lookup[mod] = true
-        lookup[string.lower(tostring(mod)):gsub("%s+", "")] = true
     end
 
     local list = {}
@@ -1236,9 +987,7 @@ function CombinedData:GetAllTrialsList()
             if setthreadidentity then pcall(setthreadidentity, 8) end
             local title = resolved and resolved.title or trialName
             local mapName = resolved and resolved.mapName or "Unknown"
-            local cleanName = string.lower(tostring(trialName)):gsub("%s+", "")
-            local cleanTitle = string.lower(tostring(title)):gsub("%s+", "")
-            local isWon = (lookup[trialName] == true) or (lookup[cleanName] == true) or (lookup[cleanTitle] == true)
+            local isWon = lookup[trialName] == true
             table.insert(list, {
                 Name = trialName,
                 Title = title,
@@ -1249,9 +998,7 @@ function CombinedData:GetAllTrialsList()
         end
     else
         for _, t in ipairs(StaticTrialDefinitions) do
-            local cleanName = string.lower(tostring(t.Name)):gsub("%s+", "")
-            local cleanTitle = string.lower(tostring(t.Title)):gsub("%s+", "")
-            local isWon = (lookup[t.Name] == true) or (lookup[cleanName] == true) or (lookup[cleanTitle] == true)
+            local isWon = lookup[t.Name] == true
             table.insert(list, {
                 Name = t.Name,
                 Title = t.Title,
@@ -1268,14 +1015,7 @@ end
 function CombinedData:IsTrialWon(trialName)
     if not trialName then return false end
     if setthreadidentity then pcall(setthreadidentity, 8) end
-    local ownedModifiers = getCacheValue("Inventory.Modifiers")
-    if not ownedModifiers or (type(ownedModifiers) == "table" and #ownedModifiers == 0) then
-        if inMemoryOwnedModifiers and #inMemoryOwnedModifiers > 0 then
-            ownedModifiers = inMemoryOwnedModifiers
-        else
-            ownedModifiers = getSavedOwnedModifiers() or {}
-        end
-    end
+    local ownedModifiers = getCacheValue("Inventory.Modifiers") or {}
     if setthreadidentity then pcall(setthreadidentity, 8) end
 
     local target = string.lower(trialName):gsub("%s+", "")
